@@ -4,15 +4,19 @@ import os
 import json
 import base64
 from datetime import datetime
+import threading
+import time
 
 app = Flask(__name__)
 
+# ─── Configuration ─────────────────────────────────────────────
 GITHUB_TOKEN = os.environ['GITHUB_TOKEN']
 REPO = 'hechser/Time'
 FILE_PATH = 'memory.json'
 GITHUB_API_URL = f'https://api.github.com/repos/{REPO}/contents/{FILE_PATH}'
 BRANCH = 'main'
 
+# ─── GitHub Memory Helpers ─────────────────────────────────────
 def get_current_memory():
     headers = {
         'Authorization': f'token {GITHUB_TOKEN}',
@@ -27,8 +31,7 @@ def generate_next_tick(memory):
     data = json.loads(content)
     tick = data['tick'] + 1
     timestamp = datetime.utcnow().isoformat() + "Z"
-    
-    # Add your evolving logic here
+
     new_state = {
         "tick": tick,
         "timestamp": timestamp,
@@ -45,7 +48,7 @@ def commit_new_memory(new_state, sha):
     }
     encoded = base64.b64encode(json.dumps(new_state, indent=2).encode()).decode()
     update_payload = {
-        'message': f'AI tick update {new_state["tick"]}',
+        'message': f'AI tick update {new_state['tick']}",
         'content': encoded,
         'sha': sha,
         'branch': BRANCH
@@ -54,12 +57,32 @@ def commit_new_memory(new_state, sha):
     r.raise_for_status()
     return r.json()
 
-@app.route('/update', methods=['POST'])
+# ─── Manual Trigger Route (Optional) ────────────────────────────
+@app.route('/update', methods=['POST', 'GET'])
 def tick():
     memory = get_current_memory()
     new_state, old_state = generate_next_tick(memory)
     commit = commit_new_memory(new_state, memory['sha'])
-    return jsonify({'status': 'success', 'tick': new_state['tick'], 'commit': commit['commit']['html_url']})
+    return jsonify({
+        'status': 'success',
+        'tick': new_state['tick'],
+        'commit': commit['commit']['html_url']
+    })
 
+# ─── Autonomous Background Ticker ───────────────────────────────
+def auto_tick():
+    while True:
+        try:
+            memory = get_current_memory()
+            new_state, old_state = generate_next_tick(memory)
+            commit = commit_new_memory(new_state, memory['sha'])
+            print(f"[Tick {new_state['tick']}] committed.")
+        except Exception as e:
+            print(f"[Tick ERROR] {e}")
+        time.sleep(60 * 5)  # tick every 5 minutes
+
+# ─── Run the App ────────────────────────────────────────────────
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=3000)
+    threading.Thread(target=auto_tick, daemon=True).start()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
