@@ -24,15 +24,11 @@ def get_current_memory():
     }
     r = requests.get(GITHUB_API_URL, headers=headers)
     r.raise_for_status()
-    response_json = r.json()
+    return r.json()
 
-    # Decode the content properly
-    content = base64.b64decode(response_json['content']).decode()
+def generate_next_tick(memory):
+    content = base64.b64decode(memory['content']).decode()
     data = json.loads(content)
-
-    return data, response_json['sha']
-
-def generate_next_tick(data):
     tick = data['tick'] + 1
     timestamp = datetime.utcnow().isoformat() + "Z"
 
@@ -52,7 +48,7 @@ def commit_new_memory(new_state, sha):
     }
     encoded = base64.b64encode(json.dumps(new_state, indent=2).encode()).decode()
     update_payload = {
-        'message': f'AI tick update {new_state["tick"]}',
+        'message': f"AI tick update {new_state['tick']}",
         'content': encoded,
         'sha': sha,
         'branch': BRANCH
@@ -61,34 +57,53 @@ def commit_new_memory(new_state, sha):
     r.raise_for_status()
     return r.json()
 
-# ─── Manual Trigger Route ──────────────────────────────────────
-@app.route('/update', methods=['GET', 'POST'])
+# ─── Routes ────────────────────────────────────────────────────
+@app.route('/', methods=['GET'])
+def home():
+    return '🧠 Synthetic Thinker is alive. Use /update to tick memory.'
+
+@app.route('/status', methods=['GET'])
+def status():
+    try:
+        memory = get_current_memory()
+        content = base64.b64decode(memory['content']).decode()
+        data = json.loads(content)
+        return jsonify({
+            "tick": data['tick'],
+            "timestamp": data['timestamp'],
+            "last_thought": data.get('last_thought', 'None'),
+            "mood": data.get('mood', 'Unknown')
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/update', methods=['GET'])
 def tick():
     try:
-        current_data, sha = get_current_memory()
-        new_state, old_state = generate_next_tick(current_data)
-        commit = commit_new_memory(new_state, sha)
+        memory = get_current_memory()
+        new_state, old_state = generate_next_tick(memory)
+        commit = commit_new_memory(new_state, memory['sha'])
         return jsonify({
             'status': 'success',
             'tick': new_state['tick'],
             'commit': commit['commit']['html_url']
         })
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        return jsonify({'error': str(e)}), 500
 
-# ─── Autonomous Background Ticker ───────────────────────────────
+# ─── Background Ticker ─────────────────────────────────────────
 def auto_tick():
     while True:
         try:
-            current_data, sha = get_current_memory()
-            new_state, old_state = generate_next_tick(current_data)
-            commit = commit_new_memory(new_state, sha)
+            memory = get_current_memory()
+            new_state, old_state = generate_next_tick(memory)
+            commit = commit_new_memory(new_state, memory['sha'])
             print(f"[Tick {new_state['tick']}] committed.")
         except Exception as e:
             print(f"[Tick ERROR] {e}")
-        time.sleep(60 * 5)  # tick every 5 minutes
+        time.sleep(60 * 5)  # Tick every 5 minutes
 
-# ─── Run the App ────────────────────────────────────────────────
+# ─── Launch App ────────────────────────────────────────────────
 if __name__ == '__main__':
     threading.Thread(target=auto_tick, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
