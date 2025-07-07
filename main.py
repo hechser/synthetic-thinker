@@ -48,7 +48,7 @@ def commit_new_memory(new_state, sha):
     }
     encoded = base64.b64encode(json.dumps(new_state, indent=2).encode()).decode()
     update_payload = {
-        'message': f'AI tick update {new_state['tick']}",
+        'message': f"AI tick update {new_state['tick']}",
         'content': encoded,
         'sha': sha,
         'branch': BRANCH
