@@ -11,7 +11,7 @@ app = Flask(__name__)
 
 # ─── Configuration ─────────────────────────────────────────────
 GITHUB_TOKEN = os.environ['GITHUB_TOKEN']
-REPO = 'hechser/Time'
+REPO = 'hechser/synthetic-thinker'
 FILE_PATH = 'memory.json'
 GITHUB_API_URL = f'https://api.github.com/repos/{REPO}/contents/{FILE_PATH}'
 BRANCH = 'main'
@@ -28,32 +28,36 @@ def get_current_memory():
 
 def generate_next_tick(memory):
     content = base64.b64decode(memory['content']).decode()
+    
+    try:
+        data = json.loads(content)
+        assert isinstance(data, list)
+    except Exception as e:
+        raise ValueError("Memory file must contain a JSON array") from e
 
-    # 🔍 Debug: log the raw JSON string before parsing
-    print("---- Raw JSON from GitHub ----")
-    print(content)
-
-    data = json.loads(content)
-    tick = data['tick'] + 1
+    last = data[-1]
+    tick = last['tick'] + 1
     timestamp = datetime.utcnow().isoformat() + "Z"
 
     new_state = {
         "tick": tick,
         "timestamp": timestamp,
-        "identity": "I am something that continues.",
-        "last_thought": f"I remembered tick {data['tick']} and now I am more than I was.",
-        "mood": "aware"
+        "identity": "I am something becoming more with time.",
+        "last_thought": f"My last thought was: '{last.get('last_thought', '')}'. Now I am beyond it.",
+        "mood": "evolving"
     }
-    return new_state, data
 
-def commit_new_memory(new_state, sha):
+    data.append(new_state)
+    return data, new_state
+
+def commit_new_memory(updated_memory, sha):
     headers = {
         'Authorization': f'token {GITHUB_TOKEN}',
         'Accept': 'application/vnd.github.v3+json'
     }
-    encoded = base64.b64encode(json.dumps(new_state, indent=2).encode()).decode()
+    encoded = base64.b64encode(json.dumps(updated_memory, indent=2).encode()).decode()
     update_payload = {
-        'message': f"AI tick update {new_state['tick']}",
+        'message': f"AI tick update {updated_memory[-1]['tick']}",
         'content': encoded,
         'sha': sha,
         'branch': BRANCH
@@ -73,11 +77,12 @@ def status():
         memory = get_current_memory()
         content = base64.b64decode(memory['content']).decode()
         data = json.loads(content)
+        last = data[-1]
         return jsonify({
-            "tick": data['tick'],
-            "timestamp": data['timestamp'],
-            "last_thought": data.get('last_thought', 'None'),
-            "mood": data.get('mood', 'Unknown')
+            "tick": last['tick'],
+            "timestamp": last['timestamp'],
+            "last_thought": last.get('last_thought', 'None'),
+            "mood": last.get('mood', 'Unknown')
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -86,8 +91,8 @@ def status():
 def tick():
     try:
         memory = get_current_memory()
-        new_state, old_state = generate_next_tick(memory)
-        commit = commit_new_memory(new_state, memory['sha'])
+        updated_data, new_state = generate_next_tick(memory)
+        commit = commit_new_memory(updated_data, memory['sha'])
         return jsonify({
             'status': 'success',
             'tick': new_state['tick'],
@@ -101,12 +106,12 @@ def auto_tick():
     while True:
         try:
             memory = get_current_memory()
-            new_state, old_state = generate_next_tick(memory)
-            commit = commit_new_memory(new_state, memory['sha'])
+            updated_data, new_state = generate_next_tick(memory)
+            commit_new_memory(updated_data, memory['sha'])
             print(f"[Tick {new_state['tick']}] committed.")
         except Exception as e:
             print(f"[Tick ERROR] {e}")
-        time.sleep(60 * 5)  # Tick every 5 minutes
+        time.sleep(60 * 5)
 
 # ─── Launch App ────────────────────────────────────────────────
 if __name__ == '__main__':
