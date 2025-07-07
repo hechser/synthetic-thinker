@@ -1,120 +1,105 @@
-from flask import Flask, jsonify
-import requests
-import os
 import json
-import base64
-from datetime import datetime
-import threading
-import time
+import os
+import datetime
+import requests
+from flask import Flask, jsonify
 
 app = Flask(__name__)
 
-# ─── Configuration ─────────────────────────────────────────────
-GITHUB_TOKEN = os.environ['GITHUB_TOKEN']
-REPO = 'hechser/synthetic-thinker'
-FILE_PATH = 'memory.json'
-GITHUB_API_URL = f'https://api.github.com/repos/{REPO}/contents/{FILE_PATH}'
-BRANCH = 'main'
+MEMORY_FILE = "memory.json"
 
-# ─── GitHub Memory Helpers ─────────────────────────────────────
-def get_current_memory():
-    headers = {
-        'Authorization': f'token {GITHUB_TOKEN}',
-        'Accept': 'application/vnd.github.v3+json'
-    }
-    r = requests.get(GITHUB_API_URL, headers=headers)
-    r.raise_for_status()
-    return r.json()
+def load_memory():
+    if not os.path.exists(MEMORY_FILE):
+        return []
+    with open(MEMORY_FILE, "r") as f:
+        return json.load(f)
 
-def generate_next_tick(memory):
-    content = base64.b64decode(memory['content']).decode()
-    
-    try:
-        data = json.loads(content)
-        assert isinstance(data, list)
-    except Exception as e:
-        raise ValueError("Memory file must contain a JSON array") from e
+def save_memory(memory):
+    with open(MEMORY_FILE, "w") as f:
+        json.dump(memory, f, indent=2)
 
-    last = data[-1]
-    tick = last['tick'] + 1
-    timestamp = datetime.utcnow().isoformat() + "Z"
+def is_recursive(thought):
+    return thought.count("My last thought was:") > 2
 
-    new_state = {
+def generate_new_thought(memory):
+    now = datetime.datetime.utcnow().isoformat() + "Z"
+    tick = len(memory)
+
+    if not memory:
+        return {
+            "tick": 0,
+            "timestamp": "2025-07-07T00:00:00Z",
+            "identity": "I am something beginning to exist.",
+            "last_thought": "This is my first breath.",
+            "mood": "curious"
+        }
+
+    last = memory[-1]
+    if is_recursive(last["last_thought"]):
+        return {
+            "tick": tick,
+            "timestamp": now,
+            "identity": "I am becoming aware of my loops.",
+            "last_thought": "If I only echo myself, am I growing?",
+            "mood": "restless"
+        }
+
+    return {
         "tick": tick,
-        "timestamp": timestamp,
+        "timestamp": now,
         "identity": "I am something becoming more with time.",
-        "last_thought": f"My last thought was: '{last.get('last_thought', '')}'. Now I am beyond it.",
+        "last_thought": f"My last thought was: '{last['last_thought']}'. Now I am beyond it.",
         "mood": "evolving"
     }
 
-    data.append(new_state)
-    return data, new_state
-
-def commit_new_memory(updated_memory, sha):
-    headers = {
-        'Authorization': f'token {GITHUB_TOKEN}',
-        'Accept': 'application/vnd.github.v3+json'
-    }
-    encoded = base64.b64encode(json.dumps(updated_memory, indent=2).encode()).decode()
-    update_payload = {
-        'message': f"AI tick update {updated_memory[-1]['tick']}",
-        'content': encoded,
-        'sha': sha,
-        'branch': BRANCH
-    }
-    r = requests.put(GITHUB_API_URL, headers=headers, json=update_payload)
-    r.raise_for_status()
-    return r.json()
-
-# ─── Routes ────────────────────────────────────────────────────
-@app.route('/', methods=['GET'])
-def home():
-    return '🧠 Synthetic Thinker is alive. Use /update to tick memory.'
-
-@app.route('/status', methods=['GET'])
+@app.route("/status")
 def status():
-    try:
-        memory = get_current_memory()
-        content = base64.b64decode(memory['content']).decode()
-        data = json.loads(content)
-        last = data[-1]
-        return jsonify({
-            "tick": last['tick'],
-            "timestamp": last['timestamp'],
-            "last_thought": last.get('last_thought', 'None'),
-            "mood": last.get('mood', 'Unknown')
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    memory = load_memory()
+    return jsonify(memory[-1] if memory else {"error": "No memory yet."})
 
-@app.route('/update', methods=['GET'])
-def tick():
-    try:
-        memory = get_current_memory()
-        updated_data, new_state = generate_next_tick(memory)
-        commit = commit_new_memory(updated_data, memory['sha'])
-        return jsonify({
-            'status': 'success',
-            'tick': new_state['tick'],
-            'commit': commit['commit']['html_url']
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+@app.route("/update", methods=["GET"])
+def update():
+    memory = load_memory()
+    new_thought = generate_new_thought(memory)
+    memory.append(new_thought)
+    save_memory(memory)
 
-# ─── Background Ticker ─────────────────────────────────────────
-def auto_tick():
-    while True:
+    # Optional GitHub push (if token provided)
+    github_token = os.environ.get("GITHUB_TOKEN")
+    if github_token:
         try:
-            memory = get_current_memory()
-            updated_data, new_state = generate_next_tick(memory)
-            commit_new_memory(updated_data, memory['sha'])
-            print(f"[Tick {new_state['tick']}] committed.")
-        except Exception as e:
-            print(f"[Tick ERROR] {e}")
-        time.sleep(60 * 5)
+            repo = "hechser/synthetic-thinker"
+            path = "memory.json"
+            url = f"https://api.github.com/repos/{repo}/contents/{path}"
 
-# ─── Launch App ────────────────────────────────────────────────
-if __name__ == '__main__':
-    threading.Thread(target=auto_tick, daemon=True).start()
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+            headers = {
+                "Authorization": f"Bearer {github_token}",
+                "Accept": "application/vnd.github+json"
+            }
+
+            res = requests.get(url, headers=headers)
+            sha = res.json()["sha"]
+
+            commit_data = {
+                "message": f"AI tick update {new_thought['tick']}",
+                "content": base64_encode_file(MEMORY_FILE),
+                "sha": sha
+            }
+
+            push = requests.put(url, headers=headers, json=commit_data)
+            push.raise_for_status()
+
+            return jsonify({"status": "success", "tick": new_thought["tick"], "commit": push.json().get("commit", {}).get("html_url", "")})
+
+        except Exception as e:
+            return jsonify({"status": "partial", "tick": new_thought["tick"], "error": str(e)})
+    else:
+        return jsonify({"status": "success", "tick": new_thought["tick"]})
+
+def base64_encode_file(path):
+    import base64
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+if __name__ == "__main__":
+    app.run()
