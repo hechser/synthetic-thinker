@@ -28,6 +28,11 @@ def get_current_memory():
 
 def generate_next_tick(memory):
     content = base64.b64decode(memory['content']).decode()
+
+    # 🔍 Debug: log the raw JSON string before parsing
+    print("---- Raw JSON from GitHub ----")
+    print(content)
+
     data = json.loads(content)
     tick = data['tick'] + 1
     timestamp = datetime.utcnow().isoformat() + "Z"
